@@ -1,0 +1,15 @@
+1) In kern/arch/mips/include/asmdefs.h, MIPS registers are assigned to constant names. From the list in this file, we can see that the stack pointer (sp) regsiter is $29.
+
+2) In kern/arch/mips/include/spl.h, we see the interfaces for enabling/disabling interrupts. The name of the function that disables interrupts is "splhigh()", which sets spl to the highest value. Setting spl to the highest value means that the current execution is of the highest priority to the system, so there is no higher priority level that an interrupt may have such that the current execution can be interrupted.
+
+3) In kern/arch/mips/mips/spl.c, we see the implementation for spl functions. The splx() function returns the value of the priority the system was at before it was called. This is because this function is called by an interrupt before it executes its handler body so it can set the system priority level to its own value, and not be interrupted by lower priority code. After the interrupt's handler body is finished, it should restore the priority the system was set to before it executed which is why it is necessary for splx() to return that value.
+
+4) In kern/arch/mips/mips/spl.c, we see that the highest interrupt level has alias SPL_HIGH, which is set to 15 in kern/arch/mips/include/spl.h
+
+5) In kern/include/clock.h, the comments indicate that hardclock() is called from the timer interrupt HZ times a second. In the same file, HZ is defined to be 100. So, hardclock() is invoked at a rate of 100/s. The device that causes these invocations to occur is the timer.
+
+6) The possible states a thread can be in are RUN (Running), READY, SLEEP (Sleeping), ZOMB (Zombie). Zombie threads get cleaned up when exorcise() is invoked, which occurs at the end of a context switch (mi_switch()) when the OS is switching to an already existing (non-new) thread (as explained by the comments).
+
+7) The function thread_sleep() is used to put a thread to sleep.
+
+8) The kernel's global variable curthread is a pointer to the currently executing thread.
