@@ -238,6 +238,9 @@ cv_create(const char *name)
 #if OPT_A1
     // Initialize counter
     cv->count = 0;
+
+    // Create queue
+    cv->q = q_create(1);
 #else
 	// add stuff here as needed
 #endif // OPT_A1
@@ -253,6 +256,12 @@ cv_destroy(struct cv *cv)
 #if OPT_A1
     // Ensure that we have no one waiting
     assert(cv->count == 0);
+
+    // Ensure the queue is empty
+    assert(q_empty(cv->q));
+
+    // Destory the queue
+    q_destroy(cv->q);
 #else
 	// add stuff here as needed
 #endif // OPT_A1
@@ -284,8 +293,18 @@ cv_wait(struct cv *cv, struct lock *lock)
     // Increment waiting count
     cv->count++;
 
-    // Put this thread to sleep. Hopefully the sleepers "array" preserves FIFO ordering
-    thread_sleep(cv);
+    // Expand the queue, if necessary
+    assert(!q_preallocate(cv->q, cv->count));
+
+    // Add this thread to the queue
+    assert(!q_addtail(cv->q, curthread));
+
+    /*
+     * Put this thread to sleep. Have its addr key as a pointer to itself for 2 reasons:
+     * 1) Ensure FIFO ordering for signalled threads.
+     * 2) Ensure 1 thread is woken up at a time.
+     */
+    thread_sleep(curthread);
 
     // Once woken up, reacquire the same mutex lock (may sleep again)
     lock_acquire(lock);
@@ -320,8 +339,11 @@ cv_signal(struct cv *cv, struct lock *lock)
     // Decrement waiting thread count
     cv->count--;
 
+    // Dequeue next waiting thread
+    struct thread *signalled = q_remhead(cv->q);
+    
     // Wake up a thread
-    thread_wakeup(cv);
+    thread_wakeup(signalled);
 
     // Restore previous priority level
 	splx(spl);
