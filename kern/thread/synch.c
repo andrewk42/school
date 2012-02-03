@@ -10,6 +10,8 @@
 #include <curthread.h>
 #include <machine/spl.h>
 
+#include "opt-A1.h"
+
 ////////////////////////////////////////////////////////////
 //
 // Semaphore.
@@ -113,8 +115,13 @@ lock_create(const char *name)
 		kfree(lock);
 		return NULL;
 	}
-	
-	// add stuff here as needed
+
+#if OPT_A1
+	lock->occupied = 0;
+    lock->owner = NULL;
+#else
+    // add stuff here as needed
+#endif // OPT_A1
 	
 	return lock;
 }
@@ -124,7 +131,12 @@ lock_destroy(struct lock *lock)
 {
 	assert(lock != NULL);
 
-	// add stuff here as needed
+#if OPT_A1
+	// Ensure no one currently holds the lock
+    assert(!lock->occupied && lock->owner == NULL);
+#else
+    // add stuff here as needed
+#endif // OPT_A1
 	
 	kfree(lock->name);
 	kfree(lock);
@@ -133,27 +145,73 @@ lock_destroy(struct lock *lock)
 void
 lock_acquire(struct lock *lock)
 {
-	// Write this
+#if OPT_A1
+    int spl;
+	assert(lock != NULL);
 
-	(void)lock;  // suppress warning until code gets written
+    // As with semaphores, don't block in an interrupt handler
+	assert(in_interrupt==0);
+
+    // Maintain same structure as semaphore; ensure this is atomic/not interrupted
+    spl = splhigh();
+	while (lock->occupied && lock->owner != curthread) {
+        // Wait if the lock is being held by another thread (allow re-acquisition)
+		thread_sleep(lock);
+	}
+
+    assert(!lock->occupied || (lock->occupied && lock->owner == curthread));
+
+    // Set the occupied flag and make the current thread the owner
+    lock->occupied = 1;
+	lock->owner = curthread;
+
+    // Restore previous priority level
+	splx(spl);
+#else
+    // Write this
+
+    (void)lock; // suppress warning until code gets written
+#endif // OPT_A1
 }
 
 void
 lock_release(struct lock *lock)
 {
-	// Write this
+#if OPT_A1
+	int spl;
+    assert(lock != NULL);
 
-	(void)lock;  // suppress warning until code gets written
+    // Make this atomic
+    spl = splhigh();
+
+    // Reset occupied flag and clear owner
+    lock->occupied = 0;
+    lock->owner = NULL;
+
+    // Wake up a potential next owner
+	thread_wakeup(lock);
+
+    // Restore previous priority level
+	splx(spl);
+#else
+    // Write this
+
+    (void)lock; // suppress warning until code gets written
+#endif // OPT_A1
 }
 
 int
 lock_do_i_hold(struct lock *lock)
 {
-	// Write this
+#if OPT_A1
+	return lock->owner == curthread;
+#else
+    // Write this
 
-	(void)lock;  // suppress warning until code gets written
+    (void)lock; // suppress warning until code gets written
 
-	return 1;    // dummy until code gets written
+    return 1; // dummy until code gets written
+#endif // OPT_A1
 }
 
 ////////////////////////////////////////////////////////////
@@ -176,8 +234,13 @@ cv_create(const char *name)
 		kfree(cv);
 		return NULL;
 	}
-	
+
+#if OPT_A1
+    // Initialize counter
+    cv->count = 0;
+#else
 	// add stuff here as needed
+#endif // OPT_A1
 	
 	return cv;
 }
@@ -187,7 +250,12 @@ cv_destroy(struct cv *cv)
 {
 	assert(cv != NULL);
 
+#if OPT_A1
+    // Ensure that we have no one waiting
+    assert(cv->count == 0);
+#else
 	// add stuff here as needed
+#endif // OPT_A1
 	
 	kfree(cv->name);
 	kfree(cv);
@@ -196,23 +264,89 @@ cv_destroy(struct cv *cv)
 void
 cv_wait(struct cv *cv, struct lock *lock)
 {
+#if OPT_A1
+    int spl;
+
+    // Ensure that both locks exist, and that we currently own the mutex lock
+    assert(cv != NULL);
+    assert(lock != NULL);
+    assert(lock_do_i_hold(lock));
+
+    // Don't block in an interrupt handler
+	assert(in_interrupt==0);
+
+    // Begin atomicity
+    spl = splhigh();
+
+    // Release the mutex lock
+    lock_release(lock);
+
+    // Increment waiting count
+    cv->count++;
+
+    // Put this thread to sleep. Hopefully the sleepers "array" preserves FIFO ordering
+    thread_sleep(cv);
+
+    // Once woken up, reacquire the same mutex lock (may sleep again)
+    lock_acquire(lock);
+
+    // Restore previous priority level
+	splx(spl);
+#else
 	// Write this
 	(void)cv;    // suppress warning until code gets written
 	(void)lock;  // suppress warning until code gets written
+#endif // OPT_A1
 }
 
 void
 cv_signal(struct cv *cv, struct lock *lock)
 {
+#if OPT_A1
+    int spl;
+
+    /* Ensure that both locks exist.
+     * Not really sure why there is a pointer to a mutex lock
+     * as an argument, is it to needlessly ensure all users of
+     * this cv associate with the same mutex lock? Don't see
+     * the point in that since every thread has its own stack */
+    assert(cv != NULL);
+    assert(lock != NULL);
+    assert(lock_do_i_hold(lock));
+
+    // Begin atomicity
+    spl = splhigh();
+
+    // Decrement waiting thread count
+    cv->count--;
+
+    // Wake up a thread
+    thread_wakeup(cv);
+
+    // Restore previous priority level
+	splx(spl);
+#else
 	// Write this
 	(void)cv;    // suppress warning until code gets written
 	(void)lock;  // suppress warning until code gets written
+#endif // OPT_A1
 }
 
 void
 cv_broadcast(struct cv *cv, struct lock *lock)
 {
+#if OPT_A1
+    assert(cv != NULL);
+    assert(lock != NULL);
+    assert(lock_do_i_hold(lock));
+
+    // Just call signal() until all the threads are woken up
+    while (cv->count > 0) {
+        cv_signal(cv, lock);
+    }
+#else
 	// Write this
 	(void)cv;    // suppress warning until code gets written
 	(void)lock;  // suppress warning until code gets written
+#endif // OPT_A1
 }

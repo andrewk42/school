@@ -5,6 +5,12 @@
 #ifndef _SYNCH_H_
 #define _SYNCH_H_
 
+#include "opt-A1.h"
+
+#if OPT_A1
+#include <queue.h>
+#endif // OPT_A1
+
 /*
  * Dijkstra-style semaphore.
  * Operations:
@@ -50,8 +56,13 @@ void              sem_destroy(struct semaphore *);
 
 struct lock {
 	char *name;
+#if OPT_A1
+    volatile int occupied;
+    volatile struct thread *owner;
+#else
 	// add what you need here
 	// (don't forget to mark things volatile as needed)
+#endif // OPT_A1
 };
 
 struct lock *lock_create(const char *name);
@@ -89,8 +100,12 @@ void         lock_destroy(struct lock *);
 
 struct cv {
 	char *name;
+#if OPT_A1
+    volatile int count;
+#else
 	// add what you need here
 	// (don't forget to mark things volatile as needed)
+#endif // OPT_A1
 };
 
 struct cv *cv_create(const char *name);
