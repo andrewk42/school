@@ -77,6 +77,73 @@ struct semaphore *CatMouseWait;
  * 
  */
 
+#if OPT_A1
+struct Kitchen {
+    struct lock **bowlLocks;    // lock for each bowl
+};
+
+struct Kitchen *kitchen_create() {
+    int i;
+    struct Kitchen *k = kmalloc(sizeof(struct Kitchen));
+
+    if (k == NULL) {
+        return NULL;
+    }
+
+    k->bowlLocks = kmalloc(NumBowls * sizeof(struct lock *));
+    if (k->bowlLocks == NULL) {
+        kfree(k);
+        return NULL;
+    }
+
+    for (i = 0; i < NumBowls; i++) {
+        k->bowlLocks[i] = lock_create("bowl");
+        assert(k->bowlLocks[i] != NULL);
+    }
+
+    return k;
+}
+
+void eat(struct Kitchen *k, int creature_type) {
+    /*
+     * Convention: creature_type=0 -> cat. creature_type=1 -> mouse.
+     */
+
+    // Choose random bowl
+    unsigned int bowl = ((unsigned int)random() % NumBowls) + 1;
+
+    // Acquire this bowl's lock
+    lock_acquire(k->bowlLocks[bowl-1]);
+    assert(lock_do_i_hold(k->bowlLocks[bowl-1]));
+
+    // Eat
+    if (creature_type) {
+        mouse_eat(bowl);
+    } else {
+        cat_eat(bowl);
+    }
+
+    // Release this bowl's lock
+    lock_release(k->bowlLocks[bowl-1]);
+}
+
+void kitchen_destroy(struct Kitchen *k) {
+    int i;
+
+    // Destroy the bowl locks
+    for (i = 0; i < NumBowls; i++) {
+        lock_destroy(k->bowlLocks[i]);
+    }
+
+    // Destroy the bowl lock array
+    kfree(k->bowlLocks);
+
+    // Destroy the kitchen
+    kfree(k);
+}
+
+struct Kitchen *k;  // global kitchen variable
+#endif //OPT_A1
 
 /*
  * cat_simulation()
@@ -128,9 +195,14 @@ cat_simulation(void * unusedpointer,
      * synchronization so that the cat does not violate
      * the rules when it eats */
 
+#if OPT_A1
+    (void)bowl; //suppress warning
+    eat(k, 0);
+#else
     /* legal bowl numbers range from 1 to NumBowls */
     bowl = ((unsigned int)random() % NumBowls) + 1;
     cat_eat(bowl);
+#endif // OPT_A1
 
   }
 
@@ -189,9 +261,14 @@ mouse_simulation(void * unusedpointer,
      * synchronization so that the mouse does not violate
      * the rules when it eats */
 
+#if OPT_A1
+    (void)bowl; // suppress warning
+    eat(k, 1);
+#else
     /* legal bowl numbers range from 1 to NumBowls */
     bowl = ((unsigned int)random() % NumBowls) + 1;
     mouse_eat(bowl);
+#endif // OPT_A1
 
   }
 
@@ -277,6 +354,11 @@ catmouse(int nargs,
     panic("catmouse: error initializing bowls.\n");
   }
 
+#if OPT_A1
+  // Create the kitchen
+  k = kitchen_create();
+#endif
+
   /*
    * Start NumCats cat_simulation() threads.
    */
@@ -302,6 +384,11 @@ catmouse(int nargs,
   for(i=0;i<(NumCats+NumMice);i++) {
     P(CatMouseWait);
   }
+
+#if OPT_A1
+  // Cleanup the kitchen lol
+  kitchen_destroy(k);
+#endif
 
   /* clean up the semaphore the we created */
   sem_destroy(CatMouseWait);
