@@ -90,7 +90,7 @@ struct Group {
 struct Kitchen {
     struct lock **bowlLocks, *enterLock;    // lock for each bowl, lock to enter kitchen
     struct cv *kitchenLock;                 // queue for waiting to get into the kitchen
-    struct queue *groups;                   // queue for keeping track of groups of same-type creatures
+    volatile struct queue *groups;                   // queue for keeping track of groups of same-type creatures
     volatile int current_creature;          // flag for what type of creature is currently in the kitchen
     volatile int count;                     // how many creatures are currently in the kitchen
 };
@@ -130,6 +130,9 @@ struct Kitchen *kitchen_create() {
     // Initialize the current_creature flag
     k->current_creature = 2;
 
+    // Initialize the counter
+    k->count = 0;
+
     return k;
 }
 
@@ -153,10 +156,10 @@ void eat(struct Kitchen *k, int creature_type) {
      * Don't barge ahead of another group even if you match the current creature.
      */
     else if (!q_empty(k->groups)) {
-        kprintf("Detected a nonempty queue of size %d\n", q_getsize(k->groups)/2);
+        kprintf("Detected a nonempty queue of size %d\n", q_getsize(k->groups));
 
         // Inspect the last group in line
-        int index = (q_getend(k->groups) % q_getsize(k->groups)) - 1;
+        int index = q_getend(k->groups) > 0 ? q_getend(k->groups)-1 : q_getsize(k->groups) - 1;
         kprintf("Index of last group is %d\n", index);
         struct Group *g = (struct Group *)q_getguy(k->groups, index);
 
@@ -212,6 +215,8 @@ void eat(struct Kitchen *k, int creature_type) {
     // If here, we must match the current creature in the kitchen and can attempt to access a bowl
     lock_release(k->enterLock);
 
+    kprintf("Creature of type %d is past the entry lock, making count %d\n", creature_type, k->count);
+
     // Choose random bowl
     unsigned int bowl = ((unsigned int)random() % NumBowls) + 1;
 
@@ -238,7 +243,7 @@ void eat(struct Kitchen *k, int creature_type) {
     kprintf("Creature of type %d leaving the kitchen with count at %d\n", creature_type, k->count);
 
     // Signal the next group if there is one and none left in the kitchen
-    if (!q_empty(k->kitchenLock) && k->count == 0) {
+    if (!q_empty(k->groups) && k->count == 0) {
         struct Group *g = q_remhead(k->groups);
         int i;
 
@@ -249,6 +254,8 @@ void eat(struct Kitchen *k, int creature_type) {
         }
 
         kfree(g);
+    } else if (q_empty(k->groups) && k->count == 0) {
+        k->current_creature = 2;
     }
 
     // Release enter lock and exit
@@ -257,6 +264,8 @@ void eat(struct Kitchen *k, int creature_type) {
 
 void kitchen_destroy(struct Kitchen *k) {
     int i;
+
+    kprintf("In kitchen_destroy\n");
 
     // Destroy the queue elements
     while (!q_empty(k->groups)) {
