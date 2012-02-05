@@ -197,22 +197,36 @@ void eat(struct Kitchen *k, int creature_type) {
     // If here, we must match the current creature in the kitchen and can attempt to access a bowl
     lock_release(k->enterLock);
 
-    // Choose random bowl
-    unsigned int bowl = ((unsigned int)random() % NumBowls) + 1;
+    // Choose a random initial bowl index
+    unsigned int bowl = ((unsigned int)random() % NumBowls);
+    int i = 0;
 
-    // Acquire this bowl's lock
-    lock_acquire(k->bowlLocks[bowl-1]);
-    assert(lock_do_i_hold(k->bowlLocks[bowl-1]));
+    for (i = 0; i < NumBowls; i++) {
+        // Try to acquire it, but don't block if it is occupied
+        if (lock_tryacquire(k->bowlLocks[bowl])) break;
+
+        // Try another bowl
+        bowl = (bowl+1) % NumBowls;
+    }
+
+    // If all the bowls are occupied
+    if (i == NumBowls) {
+        // Just wait to acquire the initially chosen one
+        bowl %= NumBowls;
+        lock_acquire(k->bowlLocks[bowl]);
+    }
+
+    assert(lock_do_i_hold(k->bowlLocks[bowl]));
 
     // Eat
     if (creature_type) {
-        mouse_eat(bowl);
+        mouse_eat(bowl+1);
     } else {
-        cat_eat(bowl);
+        cat_eat(bowl+1);
     }
 
     // Release this bowl's lock
-    lock_release(k->bowlLocks[bowl-1]);
+    lock_release(k->bowlLocks[bowl]);
 
     // Reacquire entrance lock
     lock_acquire(k->enterLock);

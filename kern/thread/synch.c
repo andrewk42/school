@@ -214,6 +214,17 @@ lock_do_i_hold(struct lock *lock)
 #endif // OPT_A1
 }
 
+#if OPT_A1
+int
+lock_tryacquire(struct lock *lock)
+{
+    if (lock->occupied) return 0;
+    else lock_acquire(lock);
+
+    return 1;
+}
+#endif // OPT_A1
+
 ////////////////////////////////////////////////////////////
 //
 // CV
