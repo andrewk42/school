@@ -105,7 +105,7 @@ struct cv {
 	char *name;
 #if OPT_A1
     volatile int count;
-    volatile struct queue *q;
+    struct queue *q;
 #else
 	// add what you need here
 	// (don't forget to mark things volatile as needed)

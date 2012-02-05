@@ -140,6 +140,11 @@ lock_destroy(struct lock *lock)
 	
 	kfree(lock->name);
 	kfree(lock);
+
+#if OPT_A1
+    // Reset pointer
+    lock = NULL;
+#endif
 }
 
 void
@@ -218,6 +223,8 @@ lock_do_i_hold(struct lock *lock)
 int
 lock_tryacquire(struct lock *lock)
 {
+    assert(lock != NULL);
+
     if (lock->occupied) return 0;
     else lock_acquire(lock);
 
@@ -279,6 +286,11 @@ cv_destroy(struct cv *cv)
 	
 	kfree(cv->name);
 	kfree(cv);
+
+#if OPT_A1
+    // Reset pointer
+    cv = NULL;
+#endif
 }
 
 void
@@ -377,6 +389,9 @@ cv_broadcast(struct cv *cv, struct lock *lock)
     while (cv->count > 0) {
         cv_signal(cv, lock);
     }
+
+    assert(cv->count == 0);
+    assert(q_empty(cv->q));
 #else
 	// Write this
 	(void)cv;    // suppress warning until code gets written

@@ -22,7 +22,7 @@
 #include <synch.h>
 
 #if OPT_A1
-#include <queue.h>
+#include "kitchen.h"
 #endif // OPT_A1
 
 /*
@@ -82,67 +82,80 @@ struct semaphore *CatMouseWait;
  */
 
 #if OPT_A1
-struct Group {
-    volatile int type;
-    volatile int amount;
-};
+struct kitchen *k = NULL;  // global kitchen variable
 
-struct Kitchen {
-    struct lock **bowlLocks, *enterLock;    // lock for each bowl, lock to enter kitchen
-    struct cv *kitchenLock;                 // queue for waiting to get into the kitchen
-    volatile struct queue *groups;                   // queue for keeping track of groups of same-type creatures
-    volatile int current_creature;          // flag for what type of creature is currently in the kitchen
-    volatile int count;                     // how many creatures are currently in the kitchen
-};
-
-struct Kitchen *kitchen_create() {
+struct kitchen *kitchen_create() {
     int i;
 
     // Create the top-level struct
-    struct Kitchen *k = kmalloc(sizeof(struct Kitchen));
+    struct kitchen *k = kmalloc(sizeof(struct kitchen));
 
     if (k == NULL) {
         return NULL;
     }
 
-    // Construct the bowlLock array
-    k->bowlLocks = kmalloc(NumBowls * sizeof(struct lock *));
-    if (k->bowlLocks == NULL) {
+    // Construct the bowl lock array
+    k->bowl_locks = kmalloc(NumBowls * sizeof(struct lock *));
+    if (k->bowl_locks == NULL) {
         kfree(k);
         return NULL;
     }
 
-    // Construct each bowlLock
+    // Construct each bowl lock
     for (i = 0; i < NumBowls; i++) {
-        k->bowlLocks[i] = lock_create("bowl");
-        assert(k->bowlLocks[i] != NULL);
+        k->bowl_locks[i] = lock_create("bowl");
     }
 
     // Construct the entrance lock
-    k->enterLock = lock_create("enter");
+    k->kitchen_lock = lock_create("enter");
 
     // Construct the kitchen cv
-    k->kitchenLock = cv_create("kitchen");
+    k->kitchen_cv = cv_create("kitchen");
 
     // Construct the group queue
-    k->groups = q_create(1);
+    k->group_list = q_create(1);
 
     // Initialize the current_creature flag
     k->current_creature = 2;
 
     // Initialize the counter
-    k->count = 0;
+    k->creature_count = 0;
 
     return k;
 }
 
-void eat(struct Kitchen *k, int creature_type) {
+void enter_kitchen(const int creature_type) {
     /*
-     * Convention: creature_type=0 -> cat. creature_type=1 -> mouse.
+     * Policy: Let any amount of cats try to access any amount of bowls at once,
+     * or let any amount of mice try to access any amount of bowls at once, but
+     * never mix.
+     *
+     * So, if the kitchen is empty, the first creature can enter regardless. If
+     * that creature is a mouse, let all subsequent creatures that are mice enter
+     * without delay. But, as soon as the next creature is a cat, stop letting
+     * all subsequent creatures in, and put them in groups waiting in line.
+     * Idea is to wait until all the mice currently in the kitchen are done, then
+     * let a "burst" of cats in, then wait until all of them are done, then let a
+     * "burst" of mice in, etc.
+     *
+     * For example, if x's are mice, and y's are cats, say we have this stream of
+     * animals (arrived at the kitchen in order from right to left)
+     *
+     *   Time   |   Outside of Kitchen    |    Inside Kitchen   |  Done eating
+     *    t0       yyyxyyyyyxxxxxxyyyyxx
+     *    t1       yyyxyyyyyxxxxxxyyyy               xx
+     *    t2       yyyxyyyyyxxxxxx                   yyyy               xx
+     *    t3       yyyxyyyyy                         xxxxxx         yyyyxx
+     *
+     *
+     * This policy has the objective of being as fair as possible, with efficieny
+     * as an important but secondary objective (we let any amount of 1 creature
+     * type in at once). Besides, we are multithreading to get a huge efficiency
+     * gain in the first place.
      */
 
     // Want mutual exclusion for group processing
-    lock_acquire(k->enterLock);
+    lock_acquire(k->kitchen_lock);
 
     // First creature in gets to initially set the current_creature flag and enter
     if (k->current_creature == 2) {
@@ -152,50 +165,102 @@ void eat(struct Kitchen *k, int creature_type) {
      * If the queue is not empty, know that there are other groups to go first.
      * Don't barge ahead of another group even if you match the current creature.
      */
-    else if (!q_empty(k->groups)) {
+    else if (!q_empty(k->group_list)) {
         // Inspect the last group in line
-        int index = q_getend(k->groups) > 0 ? q_getend(k->groups)-1 : q_getsize(k->groups) - 1;
-        struct Group *g = (struct Group *)q_getguy(k->groups, index);
+        int index = q_getend(k->group_list) > 0 ? q_getend(k->group_list)-1 : q_getsize(k->group_list) - 1;
+        struct kgroup *g = (struct kgroup *)q_getguy(k->group_list, index);
 
         if (g->type == creature_type) {
-            // Include in the last group
+            // If the last group is of your type, merge into that group
             g->amount++;
         } else {
-            // Create a new last group
-            g = kmalloc(sizeof(struct Group));
+            // Otherwise, start a new last group
+            g = kmalloc(sizeof(struct kgroup));
             g->type = creature_type;
             g->amount = 1;
 
             // Enqueue new group
-            q_addtail(k->groups, g);
+            q_addtail(k->group_list, g);
         }
 
         // Wait
-        cv_wait(k->kitchenLock, k->enterLock);
+        cv_wait(k->kitchen_cv, k->kitchen_lock);
     }
     /*
      * If we aren't the first creature, and the queue is empty, check if we match the
-     * creature currently in the kitchen. If not, we are going to start the first group
-     * to wait on getting in.
+     * creature currently in the kitchen. If not, we are going to start the only group
+     * in the queue.
      */
     else if (k->current_creature != creature_type) {
-        struct Group *g = kmalloc(sizeof(struct Group));
+        // Create a group struct
+        struct kgroup *g = kmalloc(sizeof(struct kgroup));
+
+        // Group is of your type with 1 creature so far
         g->type = creature_type;
         g->amount = 1;
 
-        q_addtail(k->groups, g);
+        // Enqueue new group
+        q_addtail(k->group_list, g);
 
-        cv_wait(k->kitchenLock, k->enterLock);
+        // Wait
+        cv_wait(k->kitchen_cv, k->kitchen_lock);
     }
 
-    // Set the current creature type
+    // If here, we have been granted access to the kitchen
+
+    // Set the creature type currently owning the kitchen
     k->current_creature = creature_type;
 
-    // Increment count
-    k->count++;
+    // Increment creature count
+    k->creature_count++;
 
-    // If here, we must match the current creature in the kitchen and can attempt to access a bowl
-    lock_release(k->enterLock);
+    /*
+     * Release kitchen lock before accessing the bowls, because we want any amount
+     * of one type of creature to be able to access the bowls at once.
+     */
+    lock_release(k->kitchen_lock);
+}
+
+void exit_kitchen() {
+    // Reacquire entrance lock
+    lock_acquire(k->kitchen_lock);
+
+    // Decrement count
+    k->creature_count--;
+
+    /*
+     * If there are no creatures left, let in the next group waiting.
+     * If there is no other group waiting, reset the switch that
+     * indicates which creature type currently owns the kitchen.
+     */
+    if (!q_empty(k->group_list) && k->creature_count == 0) {
+        // Dequeue first group in line
+        struct kgroup *g = q_remhead(k->group_list);
+        int i;
+
+        // Signal every member of that group
+        for (i = 0; i < g->amount; i++) {
+            cv_signal(k->kitchen_cv, k->kitchen_lock);
+        }
+
+        // Destroy the group struct
+        kfree(g);
+    } else if (q_empty(k->group_list) && k->creature_count == 0) {
+        // 2 is the "unset" value for k->current_creature
+        k->current_creature = 2;
+    }
+
+    // Release enter lock and exit
+    lock_release(k->kitchen_lock);
+}
+
+void eat(const int creature_type) {
+    /*
+     * Convention: creature_type=0 -> cat. creature_type=1 -> mouse.
+     */
+
+    // Try to enter kitchen and potentially get blocked/grouped
+    enter_kitchen(creature_type);
 
     // Choose a random initial bowl index
     unsigned int bowl = ((unsigned int)random() % NumBowls);
@@ -203,7 +268,7 @@ void eat(struct Kitchen *k, int creature_type) {
 
     for (i = 0; i < NumBowls; i++) {
         // Try to acquire it, but don't block if it is occupied
-        if (lock_tryacquire(k->bowlLocks[bowl])) break;
+        if (lock_tryacquire(k->bowl_locks[bowl])) break;
 
         // Try another bowl
         bowl = (bowl+1) % NumBowls;
@@ -213,10 +278,10 @@ void eat(struct Kitchen *k, int creature_type) {
     if (i == NumBowls) {
         // Just wait to acquire the initially chosen one
         bowl %= NumBowls;
-        lock_acquire(k->bowlLocks[bowl]);
+        lock_acquire(k->bowl_locks[bowl]);
     }
 
-    assert(lock_do_i_hold(k->bowlLocks[bowl]));
+    assert(lock_do_i_hold(k->bowl_locks[bowl]));
 
     // Eat
     if (creature_type) {
@@ -226,62 +291,43 @@ void eat(struct Kitchen *k, int creature_type) {
     }
 
     // Release this bowl's lock
-    lock_release(k->bowlLocks[bowl]);
+    lock_release(k->bowl_locks[bowl]);
 
-    // Reacquire entrance lock
-    lock_acquire(k->enterLock);
-
-    // Decrement count
-    k->count--;
-
-    // Signal the next group if there is one and none left in the kitchen
-    if (!q_empty(k->groups) && k->count == 0) {
-        struct Group *g = q_remhead(k->groups);
-        int i;
-
-        for (i = 0; i < g->amount; i++) {
-            cv_signal(k->kitchenLock, k->enterLock);
-        }
-
-        kfree(g);
-    } else if (q_empty(k->groups) && k->count == 0) {
-        k->current_creature = 2;
-    }
-
-    // Release enter lock and exit
-    lock_release(k->enterLock);
+    exit_kitchen();
 }
 
-void kitchen_destroy(struct Kitchen *k) {
+void kitchen_destroy(struct kitchen *k) {
     int i;
 
     // Destroy the queue elements
-    while (!q_empty(k->groups)) {
-        kfree(q_remhead(k->groups));
+    while (!q_empty(k->group_list)) {
+        kfree(q_remhead(k->group_list));
     }
 
     // Destroy the queue
-    q_destroy(k->groups);
+    q_destroy(k->group_list);
 
     // Destroy the cv
-    cv_destroy(k->kitchenLock);
+    cv_destroy(k->kitchen_cv);
 
     // Destroy the entrance lock
-    lock_destroy(k->enterLock);
+    lock_destroy(k->kitchen_lock);
 
     // Destroy the bowl locks
     for (i = 0; i < NumBowls; i++) {
-        lock_destroy(k->bowlLocks[i]);
+        lock_destroy(k->bowl_locks[i]);
     }
 
     // Destroy the bowl lock array
-    kfree(k->bowlLocks);
+    kfree(k->bowl_locks);
 
     // Destroy the kitchen
     kfree(k);
+
+    // Clear the pointer
+    k = NULL;
 }
 
-struct Kitchen *k;  // global kitchen variable
 #endif //OPT_A1
 
 /*
@@ -336,7 +382,7 @@ cat_simulation(void * unusedpointer,
 
 #if OPT_A1
     (void)bowl; //suppress warning
-    eat(k, 0);
+    eat(0);
 #else
     /* legal bowl numbers range from 1 to NumBowls */
     bowl = ((unsigned int)random() % NumBowls) + 1;
@@ -402,7 +448,7 @@ mouse_simulation(void * unusedpointer,
 
 #if OPT_A1
     (void)bowl; // suppress warning
-    eat(k, 1);
+    eat(1);
 #else
     /* legal bowl numbers range from 1 to NumBowls */
     bowl = ((unsigned int)random() % NumBowls) + 1;
