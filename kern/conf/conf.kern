@@ -457,7 +457,8 @@ defoption A0
 file		main/hello.c
 defoption A1
 defoption A2
-file		userprog/fork.c
+file		userprog/proc.c
+file		userprog/syscalls.c
 # UW For A3 use the stats tracking code provided
 defoption A3
    file    vm/uw-vmstats.c

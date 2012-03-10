@@ -18,6 +18,12 @@
 #include <version.h>
 
 #include "opt-A0.h"
+#include "opt-A2.h"
+
+#if OPT_A2
+#include <proc.h>
+extern struct process *curproc;
+#endif // OPT_A2
 
 /*
  * These two pieces of data are maintained by the makefiles and build system.
@@ -77,7 +83,11 @@ boot(void)
 
 	ram_bootstrap();
 	scheduler_bootstrap();
+#if OPT_A2
+    process_bootstrap();
+#else // OPT_A2
 	thread_bootstrap();
+#endif
 	vfs_bootstrap();
 	dev_bootstrap();
 	vm_bootstrap();
@@ -97,6 +107,11 @@ boot(void)
 	#if OPT_A0
 	    hello();
 	#endif /* OPT_A0 */
+
+    #if OPT_A2
+        kprintf("Process %d initialized.\n", curproc->p_id);
+        kprintf("Has parent id %d and thread named %s.\n", curproc->p_parent, curproc->p_thread->t_name);
+    #endif // OPT_A2
 }
 
 /*
