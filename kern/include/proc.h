@@ -27,25 +27,10 @@ struct process {
 	struct thread *p_thread;
 };
 
+/* Get a pointer to the current process' parent */
+struct process *process_getparent(void);
+
 /* Call once during startup. */
 struct process *process_bootstrap(void);
-
-/*
- * Make a new thread, which will start executing at "func".  The
- * "data" arguments (one pointer, one integer) are passed to the
- * function.  The current thread is used as a prototype for creating
- * the new one. If "ret" is non-null, the thread structure for the new
- * thread is handed back. (Note that using said thread structure from
- * the parent thread should be done only with caution, because in
- * general the child thread might exit at any time.) Returns an error
- * code.
- */
-int process_fork(const char *name, 
-		void *data1, unsigned long data2, 
-		void (*func)(void *, unsigned long),
-		struct process **ret);
-
-/* Machine dependent entry point for new threads. */
-void md_forkentry(struct trapframe *tf);
 
 #endif /* _PROC_H_ */

@@ -5,7 +5,7 @@
 #include <types.h>
 #include <kern/errno.h>
 #include <lib.h>
-#include <machine/pcb.h>
+#include <machine/trapframe.h>
 #include <array.h>
 #include <thread.h>
 #include <proc.h>
@@ -17,7 +17,7 @@ struct process *curproc;
 static struct proc_table *proc_table;
 
 /*
- * Table usage
+ * Process Table usage
  */
 static
 pid_t
@@ -84,8 +84,27 @@ request_pid(struct process *p) {
     // Set the return value
     ret = proc_table->nextpid;
 
+    // Set the new pid in the registered process' struct
+    p->p_id = ret;
+
     // Increment the nextpid counter
     proc_table->nextpid++;
+
+    return ret;
+}
+
+static
+struct process *
+remove_pid(pid_t pid) {
+    // Get the process being removed
+    struct process *ret = array_getguy(proc_table->proc_list, pid);
+
+    /*
+     * Don't shrink or change the process table in any way. Just set the
+     * index no longer being used to NULL.
+     */
+    struct process *null = NULL;
+    array_setguy(proc_table->proc_list, pid, null);
 
     return ret;
 }
@@ -149,18 +168,155 @@ process_bootstrap(void)
     return me;
 }
 
-int
-process_fork(const char *name, 
-		void *data1, unsigned long data2, 
-		void (*func)(void *, unsigned long),
-		struct process **ret)
+struct process *
+process_getparent(void)
 {
+    pid_t parent_pid = curproc->p_parent;
+
+    return array_getguy(proc_table->proc_list, parent_pid);
+}
+
+pid_t
+sys_fork(struct trapframe *tf)
+{
+    struct process *child;
+    struct thread **t;
+    pid_t ret;
+    int err;
+
+    kprintf("In sys_fork\n");
+
+    // Allocate the new process
+    child = kmalloc(sizeof(struct process));
+    if (child == NULL) {
+        /*
+         * Can't return ENOMEM without it being interpreted as a valid pid. So
+         * convention is to return -2 in place of ENOMEM, so that it can
+         * eventually be converted to ENOMEM in mips_syscall().
+         */
+        return -2;
+    }
+
     /*
-     * Get a pid from the process table. If this fails, the process table
-     * is full, so return EAGAIN.
+     * Get a pid from the process table. If this fails, return the error from
+     * the process table.
+     */
+    ret = request_pid(child);
+    if (ret < 0) {
+        // If request_pid failed, die here.
+        kfree(child);
+        return ret;
+    }
+
+    /*
+     * request_pid() should have set the child's pid, but let's set the child's
+     * parent field.
+     */
+    assert(child->p_id == ret);
+    child->p_parent = curproc->p_id;
+
+    /*
+     * At this point, what's left to set up in the new process is the thread.
+     * Let thread_fork() finish most of the job (thread's name, kernel stack,
+     * current directory, pcb). It will set the child thread's pcb such that
+     * the new thread will start in md_threadentry(), which will set up the
+     * last two things, which are the user stack (t_vmspace) and copying the
+     * parent's trapframe into the child's kernel stack.
+     *
+     * So to be clear, these next couple lines is where the parent's role in
+     * forking comes to an end; the child sets up its own user stack and
+     * matching trapframe the first time it is scheduled to run.
+     */
+    const char *name = *curproc->p_thread->t_name+"-child";
+    unsigned long ignored_value = 0;
+
+    err = thread_fork(name, tf, ignored_value, md_forkentry, t);
+    if (err) {
+        kfree(child);
+        remove_pid(ret);
+
+        // Again, can't return ENOMEM. See above comment.
+		return -2;
+    }
+
+    // Ensure that thread_fork() properly returned us the thread
+    assert(sizeof(*t) == sizeof(struct thread));
+
+    // Finally attach the copy of the parent thread to the child thread
+    child->p_thread = *t;
+
+    /*
+     * TODO: Should wait here to find out that the child ran properly, and that
+     * it was able to allocate its user stack.
      */
 
+    return ret;
+
+    /*// Allocate the child's thread
+    t = kmalloc(sizeof(struct thread));
+	if (t == NULL) {
+        kfree(child);
+        remove_pid(ret);
+
+        // Again, can't return ENOMEM. See above comment.
+		return -2;
+	}
+
+    // Allocate the child's thread's name
+    const char *name = curproc->p_thread->name+"-child";
+	t->t_name = kstrdup(name);
+	if (t->t_name == NULL) {
+		kfree(child);
+        remove_pid(ret);
+        kfree(t);
+
+        // Again, can't return ENOMEM. See above comment.
+		return -2;
+	}
+
+    // Initialize the child's thread's sleep address
+	t->t_sleepaddr = NULL;
+
+    // Copy the stack of the parent to the child's thread's stack
+	t->t_stack = kmalloc(STACK_SIZE);
+    if (t->t_stack == NULL) {
+        kfree(child);
+        remove_pid(ret);
+        kfree(t->t_name);
+        kfree(t);
+
+        // Again, can't return ENOMEM. See above comment.
+        return -2;
+    }
+
+    memcpy(t->t_stack, curproc->p_thread->t_stack, STACK_SIZE);
+
+    // Copy the address space of the parent. May return ENOMEM.
+    err = as_copy(curproc->p_thread->t_vmspace, t->t_vmspace);
+    if (err == ENOMEM) {
+        kfree(child);
+        remove_pid(ret);
+        kfree(t->t_name);
+        kfree(t->t_stack);
+        kfree(t);
+
+        // Again, can't return ENOMEM. See above comment.
+        return -2;
+    }
+
+	// Inherit the current directory, just as in thread_fork()
+	if (curproc->p_thread->t_cwd != NULL) {
+		VOP_INCREF(curproc->p_thread->t_cwd);
+		t->t_cwd = curproc->p_thread->t_cwd;
+	}
+
+    // Finally attach the copy of the parent thread to the child thread
+    child->p_thread = t;
+
     
+	
+	return thread;*/
+
 
     /*
      * Call thread_fork(), which is passed the thread's name, a function
@@ -199,12 +355,4 @@ process_fork(const char *name,
 
     // Have the new thread (implementing the new process) run forkentry()
     //md_forkentry(tf);
-
-    (void)name;
-    (void)data1;
-    (void)data2;
-    (void)func;
-    (void)ret;
-
-    return 0;
 }

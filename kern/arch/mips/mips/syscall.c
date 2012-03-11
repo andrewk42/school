@@ -9,6 +9,16 @@
 
 #include "opt-A2.h"
 
+#if OPT_A2
+#include <addrspace.h>
+#include <thread.h>
+#include <proc.h>
+
+extern struct process *curproc;
+extern u_int32_t curkstack;
+
+#endif // OPT_A2
+
 
 /*
  * System call handler.
@@ -86,7 +96,7 @@ mips_syscall(struct trapframe *tf)
             break;
 
         case SYS_fork:
-            retval = sys_fork();
+            retval = sys_fork(tf);
 
             // Map sys_fork error to a proper errno
             switch (retval) {
@@ -174,6 +184,36 @@ mips_syscall(struct trapframe *tf)
 	assert(curspl==0);
 }
 
+#if OPT_A2
+void
+md_forkentry(void *t, unsigned long unused_param)
+{
+    int err;
+    struct trapframe *tf = (struct trapframe *)t;
+    struct process *parent = process_getparent();
+    (void)unused_param;
+
+    // Copy the address space of the parent. May return ENOMEM.
+    struct addrspace **new_vmspace = &curproc->p_thread->t_vmspace;
+    err = as_copy(parent->p_thread->t_vmspace, new_vmspace);
+    if (err == ENOMEM) {
+        // Not sure what to do here. Should be telling parent that something bad happened?
+    }
+
+    /*
+     * As in common_exception(), move curkstack back and copy in
+     * the trapframe. However, move back 148 bytes instead of 164
+     * since this time, we don't have a arguments to pass.
+     */
+    struct trapframe *my_tf = (struct trapframe *)curkstack-148;
+    memcpy(my_tf, tf, sizeof(struct trapframe));
+
+    // Enter mips_usermode, as if we just returned from mips_trap()
+    mips_usermode(my_tf);
+
+    // Hopefully never get here
+}
+#else // OPT_A2
 void
 md_forkentry(struct trapframe *tf)
 {
@@ -186,3 +226,4 @@ md_forkentry(struct trapframe *tf)
 
 	(void)tf;
 }
+#endif
