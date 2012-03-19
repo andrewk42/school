@@ -14,13 +14,78 @@ directory I have edited. If you wish to run my files, you may do so
 by following the instructions in the course link and plugging my
 files into your OS-161 root before compiling.
 
+Current Status:
+---------------
+-Locks and the cat/mouse simulation are complete.
+-Part of an initial design for the Process has been committed, but it
+ is not complete. The context switch sections need to be changed to
+ account for Process objects, and this will be done in parallel with
+ the completion of fork().
+-An inital design for the fork() system call has been committed, but
+ not tested and probably do not quite work yet. I have put this system
+ call on hold because the programs that test it rely on other system
+ calls to be implemented first.
+-I am currently working on _exit(), then I plan on implementing write()
+ directly after.
 
-Miscellaneous Comments:
------------------------
+
+Style/Naming Conventions:
+-------------------------
 In all of this repository, I follow variable naming conventions that
 seemed to exist in OS-161 before I began working on it. So you will
 notice lowercase struct types, underscores in function names, etc. that
 I do not usually follow, but used in this scenario for consistency.
+
+
+Fork() System Call:
+-------------------
+
+/man/syscall/fork.html: Contains the html manpage for the fork()
+system call. Considered to be the main specification for my design.
+I did not change this file, but it is included in my commits due to
+their relevance.
+
+/include/unistd.h: Contains declarations for all the user-level system
+call interfaces. I did not change this file either.
+
+/kern/conf/conf.kern: A configuration file used before "make" to
+indicate which files to include for particular assignments, and define
+preprocessor constants so that the #if OPT_A[n] blocks work properly.
+
+/kern/include/thread.h, /kern/thread/thread.c: Contain declarations
+and definitions for Threads, which are important for fork() since the
+calling thread has to be duplicated. In order to properly implement
+Processes, I will have to modify these files to move the PCB/address
+space/etc. into the Process object. But for now these are unchanged.
+
+/kern/include/proc.h, /kern/userprog/proc.c: Contain declarations and
+definitions for Processes, which are necssary for fork() since the
+idea is to make a copy of the calling Process.
+
+/kern/arch/mips/include/pcb.h, /kern/arch/mips/mips/pcb.c: Contain the
+declarations and definitions for PCBs, which are relevant to fork().
+These were not changed.
+
+/kern/arch/mips/include/trapframe.h: Contains the trapframe stuct and
+constants defining exception codes, which are relevant to fork(). These
+were not changed.
+
+/kern/include/kern/callno.h: Contains definitions of constants that
+correspond to system calls. These wre not changed.
+
+/kern/include/syscall.h, /kern/arch/mips/mips/syscall.c: Contain the
+kernel-level system call interfaces, the mips_syscall() routine (which
+is where the call number is read to branch to a particular kernel-level
+system call), and the md_forkentry() routine (which is called as part
+of the fork() system call).
+
+/kern/main/main.c: Contains the boot() routine, which was modified to
+call process_bootstrap() instead of thread_bootstrap() (threads are
+now part of processes).
+
+
+Multithreading/Concurrency Tools:
+---------------------------------
 
 /kern/include/synch.h, /kern/thread/synch.c: Contain my own
 implementations of a normal (owner) lock and condition variable (lock)

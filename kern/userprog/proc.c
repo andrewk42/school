@@ -184,8 +184,6 @@ sys_fork(struct trapframe *tf)
     pid_t ret;
     int err;
 
-    kprintf("In sys_fork\n");
-
     // Allocate the new process
     child = kmalloc(sizeof(struct process));
     if (child == NULL) {
@@ -207,6 +205,8 @@ sys_fork(struct trapframe *tf)
         kfree(child);
         return ret;
     }
+
+    kprintf("sys_fork(): Got new pid %d\n", ret);
 
     /*
      * request_pid() should have set the child's pid, but let's set the child's
@@ -240,10 +240,12 @@ sys_fork(struct trapframe *tf)
     }
 
     // Ensure that thread_fork() properly returned us the thread
-    assert(sizeof(*t) == sizeof(struct thread));
+    assert(sizeof(**t) == sizeof(struct thread));
 
     // Finally attach the copy of the parent thread to the child thread
     child->p_thread = *t;
+
+    kprintf("sys_fork(): Child successful so far, has name %s\n", child->p_thread->t_name);
 
     /*
      * TODO: Should wait here to find out that the child ran properly, and that
